@@ -25,6 +25,41 @@ void InitializeFile(HANDLE hFile, int capacity){
     FlushFileBuffers(hFile);
 }
 
+// Menu
+inline void DisplayMenu(){
+    std::cout << "\nCommands:" << std::endl;
+    std::cout << "/message\t# Read message" << std::endl;
+    std::cout << "/exit\t# Exit receiver process" << std::endl;
+}
+
+// Закрыть все дискрипторы
+void CloseHandles(std::initializer_list<HANDLE> handles){
+    for (HANDLE h : handles) {
+        if (h != NULL && h != INVALID_HANDLE_VALUE) {
+            CloseHandle(h);
+        }
+    }
+}
+void CloseHandles(const std::vector<HANDLE>& handles) {
+    for (HANDLE h : handles) {
+        if (h != NULL && h != INVALID_HANDLE_VALUE) {
+            CloseHandle(h);
+        }
+    }
+}
+void CloseHandles(const std::vector<PROCESS_INFORMATION>& processInfos) {
+    for (const auto& pi : processInfos) {
+        if (pi.hProcess != NULL) {
+            TerminateProcess(pi.hProcess, 0); 
+            WaitForSingleObject(pi.hProcess, INFINITE);
+            CloseHandle(pi.hProcess);
+        }
+        if (pi.hThread != NULL) {
+            CloseHandle(pi.hThread);
+        }
+    }
+}
+
 int main() {
     std::string filename;
     int capacity;
@@ -64,16 +99,8 @@ int main() {
 
     if (!hMutex || !hEmpty || !hFull) {
         PrintError("Synchronization objects creation failed");
-        CloseHandle(hFile);
-        if(hMutex){
-            CloseHandle(hMutex);
-        }
-        if(hEmpty){
-            CloseHandle(hEmpty);
-        }
-        if(hFull){
-            CloseHandle(hFull);
-        }
+        CloseHandles({hFile, hMutex, hEmpty, hFull});
+        std::cout << "All handles and processes closed\nShutting down..." << std::endl;
         return 1;
     }
 
@@ -88,6 +115,10 @@ int main() {
         HANDLE hEvent = CreateEvent(NULL, TRUE, FALSE, eventName.c_str());
         if (!hEvent) {
             PrintError("CreateEvent failed");
+            CloseHandles({hFile, hMutex, hEmpty, hFull, hEvent});
+            CloseHandles(readyEvents);
+            CloseHandles(processInfos);
+            std::cout << "All handles and processes closed\nShutting down..." << std::endl;
             return 1;
         }
         readyEvents.push_back(hEvent);
@@ -99,8 +130,13 @@ int main() {
 
         std::string cmd = "sender.exe " + filename + " " + std::to_string(i);
         
+        // Creating processes
         if(!CreateProcess(NULL, cmd.data(), NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)){
             PrintError("CreateProcess failed for sender " + std::to_string(i));
+            CloseHandles({hFile, hMutex, hEmpty, hFull, hEvent});
+            CloseHandles(readyEvents);
+            CloseHandles(processInfos);
+            std::cout << "All handles and processes closed\nShutting down..." << std::endl;
             return 1;
         }
 
@@ -109,4 +145,43 @@ int main() {
     }
 
     std::cout << "Waiting for all senders to be ready..." << std::endl;
+
+    // Waiting for objects
+    DWORD waitResult = WaitForMultipleObjects(senderCount, readyEvents.data(), TRUE, INFINITE);
+    if (waitResult == WAIT_FAILED) {
+        PrintError("WaitForMultipleObjects failed");
+        CloseHandles({hFile, hMutex, hEmpty, hFull});
+        CloseHandles(readyEvents);
+        CloseHandles(processInfos);
+        std::cout << "All handles and processes closed\nShutting down..." << std::endl;
+        return 1;
+    }
+
+    std::cout << "All senders are ready!" << std::endl;
+    std::cout << "Receiver is ready to work." << std::endl;
+
+    // Running main actions cycle
+    bool running = true;
+    while (running){
+        DisplayMenu();
+
+        std::string choice;
+        std::cin >> choice;
+        
+        if(choice.compare("/message") == 0){
+            
+        }
+        else if(choice.compare("/exit") == 0){
+            running = false;
+        } else{
+            continue;
+        }
+    }
+    
+    // Closing handles and finishing
+    CloseHandles({hFile, hMutex, hEmpty, hFull});
+    CloseHandles(readyEvents);
+    CloseHandles(processInfos);
+    std::cout << "All handles and processes closed\nShutting down..." << std::endl;
+    return 0;
 }
