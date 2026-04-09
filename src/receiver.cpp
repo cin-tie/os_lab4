@@ -239,10 +239,11 @@ int main() {
     DisplayMenu();
     while (running){
 
-        std::string choice;
-        std::cin >> choice;
+        std::cout << "\nSender> ";
+        std::string command;
+        std::cin >> command;
         
-        if(choice.compare("/message") == 0){
+        if(command.compare("/message") == 0){
             if(ReadMessage(hFile, hMutex, hFull, hEmpty)){
                 continue;
             }   
@@ -250,15 +251,14 @@ int main() {
                 std::cout << "Failed to read message" << std::endl;
             }
         }
-        else if(choice.compare("/exit") == 0){
+        else if(command.compare("/exit") == 0){
             std::cout << "\nShutting down Receiver..." << std::endl;
             running = false;
-        } else if(choice.compare("/help") == 0){
+        } else if(command.compare("/help") == 0){
             DisplayMenu();
         }
         else {
             std::cout << "Unknown command\nUse /help to see available" << std::endl;
-            continue;
         }
     }
     
