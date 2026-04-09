@@ -34,34 +34,6 @@ inline void DisplayMenu(){
     std::cout << "===================================" << std::endl;
 }
 
-// Close all handles (various implementations)
-void CloseHandles(std::initializer_list<HANDLE> handles){
-    for (HANDLE h : handles) {
-        if (h != NULL && h != INVALID_HANDLE_VALUE) {
-            CloseHandle(h);
-        }
-    }
-}
-void CloseHandles(const std::vector<HANDLE>& handles) {
-    for (HANDLE h : handles) {
-        if (h != NULL && h != INVALID_HANDLE_VALUE) {
-            CloseHandle(h);
-        }
-    }
-}
-void CloseHandles(const std::vector<PROCESS_INFORMATION>& processInfos) {
-    for (const auto& pi : processInfos) {
-        if (pi.hProcess != NULL) {
-            TerminateProcess(pi.hProcess, 0); 
-            WaitForSingleObject(pi.hProcess, INFINITE);
-            CloseHandle(pi.hProcess);
-        }
-        if (pi.hThread != NULL) {
-            CloseHandle(pi.hThread);
-        }
-    }
-}
-
 // Read message from queue
 bool ReadMessage(HANDLE hFile, HANDLE hMutex, HANDLE hFull, HANDLE hEmpty){
     // Wait for message to be available
@@ -102,7 +74,7 @@ bool ReadMessage(HANDLE hFile, HANDLE hMutex, HANDLE hFull, HANDLE hEmpty){
             // Reading message
             Message msg;
             if(ReadFile(hFile, &msg, sizeof(msg), &bytesRead, NULL)){
-                std::cout << "\n[RECEIVED] Message: \"" << msg.text << "\"" << std::endl;
+                std::cout << "\n[RECEIVED] Message from queue: \"" << msg.text << "\"" << std::endl;
 
                 // Update header
                 header.head = (header.head + 1) % header.capacity;
@@ -190,10 +162,10 @@ int main() {
         return 1;
     }
 
-    // Creating mutex and semaphores
-    HANDLE hMutex = CreateMutexA(NULL, FALSE, MUTEX_NAME);
-    HANDLE hEmpty = CreateSemaphoreA(NULL, capacity, capacity, EMPTY_SEM_NAME);
-    HANDLE hFull = CreateSemaphoreA(NULL, 0, capacity, FULL_SEM_NAME);
+    // Creating synchronization objects
+    HANDLE hMutex = CreateMutex(NULL, FALSE, MUTEX_NAME);
+    HANDLE hEmpty = CreateSemaphore(NULL, capacity, capacity, EMPTY_SEM_NAME);
+    HANDLE hFull = CreateSemaphore(NULL, 0, capacity, FULL_SEM_NAME);
 
     if (!hMutex || !hEmpty || !hFull) {
         PrintError("Synchronization objects creation failed");
