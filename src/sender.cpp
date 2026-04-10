@@ -3,37 +3,49 @@
 #include <string>
 #include "../include/common.h"
 
+ConsoleLogger logger;
+
 // Display sender menu
 void DisplaySenderMenu(int id) {
-    std::cout << "\n========== SENDER " << id << " MENU ==========" << std::endl;
-    std::cout << "/send   - Send message to receiver" << std::endl;
-    std::cout << "/exit   - Exit sender process" << std::endl;
-    std::cout << "/help   - Show this menu" << std::endl;
-    std::cout << "=====================================" << std::endl;
+    logger.Raw(LogColor::SENDER_COLOR, "\n========== SENDER " + std::to_string(id) + " MENU ==========");
+    logger.Raw(LogColor::SENDER_COLOR, "/send   - Send message to receiver");
+    logger.Raw(LogColor::SENDER_COLOR, "/exit   - Exit sender process");
+    logger.Raw(LogColor::SENDER_COLOR, "/help   - Show this menu");
+    logger.Raw(LogColor::SENDER_COLOR, "=====================================");
 }
 
 // Send message to queue
-bool SendMessage(HANDLE hFile, HANDLE hMutex, HANDLE hEmpty, HANDLE hFull, int senderId){
-    std::cout << "Enter message (max " << MAX_MSG_SIZE - 1 << " chars): ";
+bool SendMessage(HANDLE hFile, HANDLE hMutex, HANDLE hEmpty, HANDLE hFull, int senderId, HANDLE hConsoleMutex){
+    logger.Sender(senderId, "Enter message (max " + std::to_string(MAX_MSG_SIZE - 1) + " chars): ", false);
+    
     std::string message;
     std::cin.ignore(); // Clear input buffer
     std::getline(std::cin, message);
 
     // Validate message
     if(message.empty()){
-        std::cout << "Error: Message cannot be empty!" << std::endl;
+        logger.Error("Message cannot be empty!");
         return false;
     }
 
     if (message.length() >= MAX_MSG_SIZE) {
-        std::cout << "Error: Message too long! Maximum " << MAX_MSG_SIZE - 1 << " characters." << std::endl;
+        logger.Error("Message too long! Maximum " + std::to_string(MAX_MSG_SIZE - 1) + " characters.");
         return false;
     }
 
     // Wait for empty slot in queue
-    std::cout << "Waiting for free slot in queue..." << std::endl;
-    DWORD waitResult = WaitForSingleObject(hEmpty, INFINITE);
-    if (waitResult != WAIT_OBJECT_0) {
+    logger.Sender(senderId, "Waiting for free slot in queue...");
+    
+    DWORD waitResult = WaitForSingleObject(hEmpty, 3000);
+
+    if(waitResult == WAIT_TIMEOUT){
+        logger.Sender(senderId, "Waiting timeout. Turn to ghostwaiting");
+        ReleaseMutex(hConsoleMutex);
+        waitResult = WaitForSingleObject(hEmpty, INFINITE);
+        WaitForSingleObject(hConsoleMutex, INFINITE);
+    }
+
+    if (waitResult == WAIT_FAILED) {
         PrintError("WaitForSingleObject (hEmpty) failed");
         return false;
     }
@@ -60,7 +72,7 @@ bool SendMessage(HANDLE hFile, HANDLE hMutex, HANDLE hEmpty, HANDLE hFull, int s
 
     // Check if queue is full (safety check)
     if (fileHeader.count >= fileHeader.capacity) {
-        std::cout << "Error: Queue is full!" << std::endl;
+        logger.Error("Queue is full!");
         ReleaseMutex(hMutex);
         ReleaseSemaphore(hEmpty, 1, NULL);
         return false;
@@ -102,33 +114,54 @@ bool SendMessage(HANDLE hFile, HANDLE hMutex, HANDLE hEmpty, HANDLE hFull, int s
     ReleaseMutex(hMutex);
     ReleaseSemaphore(hFull, 1, NULL);
     
+    logger.Success("Message sent successfully!");
     return true;
 }
 
 int main(int argc, char* argv[]){
+    logger.Initialize();
+    
+    // Open console mutex (created by receiver)
+    HANDLE hConsoleMutex = OpenMutex(SYNCHRONIZE, FALSE, CONSOLE_MUTEX_NAME);
+    if (!hConsoleMutex) {
+        std::cerr << "Failed to open console mutex. Make sure receiver is running first." << std::endl;
+        logger.Cleanup();
+        return 1;
+    }
+    
     if (argc < 3) {
-        std::cout << "Usage: sender.exe <filename> <sender_id>" << std::endl;
+        WaitForSingleObject(hConsoleMutex, INFINITE);
+        logger.Error("Usage: sender.exe <filename> <sender_id>");
+        ReleaseMutex(hConsoleMutex);
+        CloseHandles({hConsoleMutex});
+        logger.Cleanup();
         return 1;
     }
 
     std::string filename = argv[1];
     int senderId = std::atoi(argv[2]);
 
-    std::cout << "========== SENDER " << senderId << " STARTED ==========" << std::endl;
+    WaitForSingleObject(hConsoleMutex, INFINITE);
+    logger.Sender(senderId, "========== SENDER " + std::to_string(senderId) + " STARTED ==========");
+    ReleaseMutex(hConsoleMutex);
 
     // Creating a file to write where
     HANDLE hFile = CreateFile(
         filename.c_str(), 
         GENERIC_READ | GENERIC_WRITE, 
         FILE_SHARE_READ | FILE_SHARE_WRITE, 
-        NULL, CREATE_ALWAYS, 
+        NULL, OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL,
         NULL
     );
 
     // Error handling
     if(hFile == INVALID_HANDLE_VALUE){
-        PrintError("CreateFile error");
+        WaitForSingleObject(hConsoleMutex, INFINITE);
+        PrintError("CreateFile error - make sure receiver created the file first");
+        ReleaseMutex(hConsoleMutex);
+        CloseHandles({hConsoleMutex});
+        logger.Cleanup();
         return 1;
     }
 
@@ -139,8 +172,11 @@ int main(int argc, char* argv[]){
     HANDLE hFull = OpenSemaphore(SEMAPHORE_ALL_ACCESS, FALSE, FULL_SEM_NAME);
 
     if(!hMutex || !hEmpty || !hFull){
+        WaitForSingleObject(hConsoleMutex, INFINITE);
         PrintError("Failed to open sync objects");
-        CloseHandles({hFile, hMutex, hEmpty, hFull});
+        ReleaseMutex(hConsoleMutex);
+        CloseHandles({hFile, hMutex, hEmpty, hFull, hConsoleMutex});
+        logger.Cleanup();
         return 1;
     }
 
@@ -151,44 +187,60 @@ int main(int argc, char* argv[]){
     if(hReadyEvent){
         SetEvent(hReadyEvent);
         CloseHandle(hReadyEvent);
-        std::cout << "Sender " << senderId << " signaled ready" << std::endl;
+        WaitForSingleObject(hConsoleMutex, INFINITE);
+        logger.Sender(senderId, "Signaled ready to receiver");
+        ReleaseMutex(hConsoleMutex);
     }
     else{
+        WaitForSingleObject(hConsoleMutex, INFINITE);
         PrintError("Failed to open ready event");
-        CloseHandles({hFile, hMutex, hEmpty, hFull});
+        ReleaseMutex(hConsoleMutex);
+        CloseHandles({hFile, hMutex, hEmpty, hFull, hConsoleMutex});
+        logger.Cleanup();
         return 1;
     }
 
-    std::cout << "Sender " << senderId << " is ready" << std::endl;
-    DisplaySenderMenu(senderId);
+    WaitForSingleObject(hConsoleMutex, INFINITE);
+    logger.Success("Sender " + std::to_string(senderId) + " is ready");
+    ReleaseMutex(hConsoleMutex);
 
     // Main comman loop
-    bool running = true;
-    while(running){
+    bool once = true;
+    while(true){
+        WaitForSingleObject(hConsoleMutex, INFINITE);
+        if(once){
+            DisplaySenderMenu(senderId);
+            once = false;
+        }
+        logger.Sender(senderId, "Sender> ", false);
+        
         std::string command;
-        std::cout << "\nSender " << senderId << "> ";
         std::cin >> command;
-
+        
         if (command == "/send") {
-            SendMessage(hFile, hMutex, hEmpty, hFull, senderId);
+            SendMessage(hFile, hMutex, hEmpty, hFull, senderId, hConsoleMutex);
         }
-        else 
-        if (command == "/exit") {
-            std::cout << "Sender " << senderId << " shutting down..." << std::endl;
-            running = false;
+        else if (command == "/exit") {
+            logger.Sender(senderId, "Shutting down...");
+            break;
         }
-        else 
-        if (command == "/help") {
+        else if (command == "/help") {
             DisplaySenderMenu(senderId);
         }
         else {
-            std::cout << "Unknown command\nUse /help to see available" << std::endl;
+            logger.Warning("Unknown command. Use /help to see available");
         }
+        ReleaseMutex(hConsoleMutex);
     }
 
     // Closing handles and finishing
     CloseHandles({hFile, hMutex, hEmpty, hFull});
-    std::cout << "Sender " << senderId << " terminated." << std::endl;
+    
+    WaitForSingleObject(hConsoleMutex, INFINITE);
+    logger.Sender(senderId, "Terminated.");
+    ReleaseMutex(hConsoleMutex);
+    CloseHandles({hConsoleMutex});
+    logger.Cleanup();
 
     return 0;
 }

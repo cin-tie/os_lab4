@@ -4,6 +4,8 @@
 #include <string>
 #include "../include/common.h"
 
+ConsoleLogger logger;
+
 // Initialize empty binary file
 void InitializeFile(HANDLE hFile, int capacity){
     FileHeader fileHeader;
@@ -27,22 +29,31 @@ void InitializeFile(HANDLE hFile, int capacity){
 
 // Menu
 inline void DisplayMenu(){
-    std::cout << "\n========== RECEIVER MENU ==========" << std::endl;
-    std::cout << "/message - Read message from queue" << std::endl;
-    std::cout << "/exit    - Exit receiver process" << std::endl;
-    std::cout << "/help    - Show this menu" << std::endl;
-    std::cout << "===================================" << std::endl;
+    logger.Raw(LogColor::RECEIVER_COLOR, "\n========== RECEIVER MENU ==========");
+    logger.Raw(LogColor::RECEIVER_COLOR, "/message - Read message from queue");
+    logger.Raw(LogColor::RECEIVER_COLOR, "/exit    - Exit receiver process");
+    logger.Raw(LogColor::RECEIVER_COLOR, "/help    - Show this menu");
+    logger.Raw(LogColor::RECEIVER_COLOR, "===================================");
 }
 
 // Read message from queue
-bool ReadMessage(HANDLE hFile, HANDLE hMutex, HANDLE hFull, HANDLE hEmpty){
-    // Wait for message to be available
-    std::cout << "Waiting for message..." << std::endl;
-    DWORD waitResult = WaitForSingleObject(hFull, INFINITE);
-    if (waitResult != WAIT_OBJECT_0) {
+bool ReadMessage(HANDLE hFile, HANDLE hMutex, HANDLE hFull, HANDLE hEmpty, HANDLE hConsoleMutex){
+    logger.Receiver("Waiting for message...");
+    
+    DWORD waitResult = WaitForSingleObject(hFull, 3000);
+
+    if(waitResult == WAIT_TIMEOUT){
+        logger.Receiver("Waiting timeout. Turn to ghostwaiting");
+        ReleaseMutex(hConsoleMutex);
+        waitResult = WaitForSingleObject(hFull, INFINITE);
+        WaitForSingleObject(hConsoleMutex, INFINITE);
+    }
+
+    if (waitResult == WAIT_FAILED) {
         PrintError("WaitForSingleObject (hFull) failed");
         return false;
     }
+
     
     if (waitResult == WAIT_OBJECT_0) {
         // Capture mutex to access file
@@ -74,8 +85,8 @@ bool ReadMessage(HANDLE hFile, HANDLE hMutex, HANDLE hFull, HANDLE hEmpty){
             // Reading message
             Message msg;
             if(ReadFile(hFile, &msg, sizeof(msg), &bytesRead, NULL)){
-                std::cout << "\n[RECEIVED] Message from queue: \"" << msg.text << "\"" << std::endl;
-
+                logger.Success("Message received: \"" + std::string(msg.text) + "\"");
+    
                 // Update header
                 header.head = (header.head + 1) % header.capacity;
                 header.count--;
@@ -108,7 +119,7 @@ bool ReadMessage(HANDLE hFile, HANDLE hMutex, HANDLE hFull, HANDLE hEmpty){
             // No messages(race condition with semaphore???)
             ReleaseMutex(hMutex);
             ReleaseSemaphore(hFull, 1, NULL);
-            std::cout << "No messages available (race condition)" << std::endl;
+            logger.Warning("No messages available (race condition)");
             return false;
         }
     }
@@ -117,19 +128,36 @@ bool ReadMessage(HANDLE hFile, HANDLE hMutex, HANDLE hFull, HANDLE hEmpty){
 }
 
 int main() {
+    logger.Initialize();
+
+    // Create console mutex
+    HANDLE hConsoleMutex = CreateMutex(NULL, FALSE, CONSOLE_MUTEX_NAME);
+    if (!hConsoleMutex) {
+        std::cerr << "Failed to create console mutex" << std::endl;
+        return 1;
+    }
+
     std::string filename;
     int capacity;
     int senderCount;
 
-    std::cout << "========== RECEIVER PROCESS ==========" << std::endl;
-    std::cout << "Enter binary file name: ";
-    std::cin >> filename;
+    WaitForSingleObject(hConsoleMutex, INFINITE);
 
-    std::cout << "Enter queue capacity (number of messages): ";
+    logger.Receiver("========== RECEIVER PROCESS ==========");
+    logger.Receiver("Enter binary file name: ", false);
+    std::cin >> filename;
+    ReleaseMutex(hConsoleMutex);
+    WaitForSingleObject(hConsoleMutex, INFINITE);
+    logger.Receiver("Enter queue capacity (number of messages): ", false);
     std::cin >> capacity;
+    ReleaseMutex(hConsoleMutex);
     
     if (capacity <= 0) {
-        std::cout << "Error: Capacity must be positive!" << std::endl;
+        WaitForSingleObject(hConsoleMutex, INFINITE);
+        logger.Error("Capacity must be positive!");
+        ReleaseMutex(hConsoleMutex);
+        CloseHandles({hConsoleMutex});
+        logger.Cleanup();
         return 1;
     }
 
@@ -145,20 +173,32 @@ int main() {
 
     // Error handling
     if(hFile == INVALID_HANDLE_VALUE){
+        WaitForSingleObject(hConsoleMutex, INFINITE);
         PrintError("CreateFile error");
+        ReleaseMutex(hConsoleMutex);
+        CloseHandles({hConsoleMutex});
+        logger.Cleanup();
         return 1;
     }
 
     InitializeFile(hFile, capacity);
 
-    std::cout << "Binary file created successfully with " << capacity << " slots." << std::endl;
+    WaitForSingleObject(hConsoleMutex, INFINITE);
+    logger.Success("Binary file created successfully with " + std::to_string(capacity) + " slots.");
+    ReleaseMutex(hConsoleMutex);
 
-    std::cout << "Enter number of Sender processes: ";
+    WaitForSingleObject(hConsoleMutex, INFINITE);
+    logger.Receiver("Enter number of Sender processes: ", false);
     std::cin >> senderCount;
+    ReleaseMutex(hConsoleMutex);
     
     if (senderCount <= 0) {
-        std::cout << "Error: Sender count must be positive!" << std::endl;
-        CloseHandle(hFile);
+        WaitForSingleObject(hConsoleMutex, INFINITE);
+        logger.Error("Sender count must be positive!");
+        ReleaseMutex(hConsoleMutex);
+        CloseHandles({hConsoleMutex});
+        CloseHandles({hFile});
+        logger.Cleanup();
         return 1;
     }
 
@@ -168,9 +208,12 @@ int main() {
     HANDLE hFull = CreateSemaphore(NULL, 0, capacity, FULL_SEM_NAME);
 
     if (!hMutex || !hEmpty || !hFull) {
+        WaitForSingleObject(hConsoleMutex, INFINITE);
         PrintError("Synchronization objects creation failed");
-        CloseHandles({hFile, hMutex, hEmpty, hFull});
-        std::cout << "All handles and processes closed\nShutting down..." << std::endl;
+        logger.Error("Shutting down...");
+        ReleaseMutex(hConsoleMutex);
+        CloseHandles({hFile, hMutex, hEmpty, hFull, hConsoleMutex});
+        logger.Cleanup();
         return 1;
     }
 
@@ -186,11 +229,14 @@ int main() {
         // Creating an event
         HANDLE hEvent = CreateEvent(NULL, TRUE, FALSE, eventName.c_str());
         if (!hEvent) {
+            WaitForSingleObject(hConsoleMutex, INFINITE);
             PrintError("CreateEvent failed");
-            CloseHandles({hFile, hMutex, hEmpty, hFull, hEvent});
+            logger.Error("Shutting down...");
+            ReleaseMutex(hConsoleMutex);
+            CloseHandles({hFile, hMutex, hEmpty, hFull, hEvent, hConsoleMutex});
             CloseHandles(readyEvents);
             CloseHandles(processInfos);
-            std::cout << "All handles and processes closed\nShutting down..." << std::endl;
+            logger.Cleanup();
             return 1;
         }
         readyEvents.push_back(hEvent);
@@ -206,11 +252,14 @@ int main() {
         
         // Creating processes
         if(!CreateProcess(NULL, cmd.data(), NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)){
+            WaitForSingleObject(hConsoleMutex, INFINITE);
             PrintError("CreateProcess failed for sender " + std::to_string(i));
-            CloseHandles({hFile, hMutex, hEmpty, hFull, hEvent});
+            logger.Error("Shutting down...");
+            ReleaseMutex(hConsoleMutex);
+            CloseHandles({hFile, hMutex, hEmpty, hFull, hEvent, hConsoleMutex});
             CloseHandles(readyEvents);
             CloseHandles(processInfos);
-            std::cout << "All handles and processes closed\nShutting down..." << std::endl;
+            logger.Cleanup();
             return 1;
         }
 
@@ -218,54 +267,68 @@ int main() {
         CloseHandle(pi.hThread); // Thread handle not needed
     }
 
-    std::cout << "Waiting for all senders to be ready..." << std::endl;
+    WaitForSingleObject(hConsoleMutex, INFINITE);
+    logger.Receiver("Waiting for all senders to be ready...");
+    ReleaseMutex(hConsoleMutex);
 
     // Waiting for objects
     DWORD waitResult = WaitForMultipleObjects(senderCount, readyEvents.data(), TRUE, INFINITE);
     if (waitResult == WAIT_FAILED) {
+        WaitForSingleObject(hConsoleMutex, INFINITE);
         PrintError("WaitForMultipleObjects failed");
-        CloseHandles({hFile, hMutex, hEmpty, hFull});
+        logger.Error("Shutting down...");
+        ReleaseMutex(hConsoleMutex);
+        CloseHandles({hFile, hMutex, hEmpty, hFull, hConsoleMutex});
         CloseHandles(readyEvents);
         CloseHandles(processInfos);
-        std::cout << "All handles and processes closed\nShutting down..." << std::endl;
+        logger.Cleanup();
         return 1;
     }
-
-    std::cout << "All senders are ready!" << std::endl;
-    std::cout << "Receiver is ready to work." << std::endl;
+    
+    WaitForSingleObject(hConsoleMutex, INFINITE);
+    logger.Success("All senders are ready!");
+    logger.Receiver("Receiver is ready to work.");
+    logger.Receiver("");
+    ReleaseMutex(hConsoleMutex);
 
     // Running main command loop
-    bool running = true;
-    DisplayMenu();
-    while (running){
-
-        std::cout << "\nReceiver> ";
+    bool once = true;
+    while (true){
+        WaitForSingleObject(hConsoleMutex, INFINITE);
+        if(once){
+            DisplayMenu();
+            once = false;
+        }
+        logger.Receiver("Receiver> ", false);
+        
         std::string command;
         std::cin >> command;
         
         if(command.compare("/message") == 0){
-            if(ReadMessage(hFile, hMutex, hFull, hEmpty)){
-                continue;
-            }   
-            else{
-                std::cout << "Failed to read message" << std::endl;
+            if(!ReadMessage(hFile, hMutex, hFull, hEmpty, hConsoleMutex)){
+                logger.Error("Failed to read message");
             }
         }
         else if(command.compare("/exit") == 0){
-            std::cout << "\nShutting down Receiver..." << std::endl;
-            running = false;
+            logger.Receiver("Shutting down Receiver...");
+            break;
         } else if(command.compare("/help") == 0){
             DisplayMenu();
         }
         else {
-            std::cout << "Unknown command\nUse /help to see available" << std::endl;
+            logger.Warning("Unknown command. Use /help to see available");
         }
+        ReleaseMutex(hConsoleMutex);
+
     }
     
     // Closing handles and finishing
-    CloseHandles({hFile, hMutex, hEmpty, hFull});
     CloseHandles(readyEvents);
     CloseHandles(processInfos);
-    std::cout << "All handles closed. Receiver terminated." << std::endl;
+    WaitForSingleObject(hConsoleMutex, INFINITE);
+    logger.Receiver("Receiver terminating...");
+    ReleaseMutex(hConsoleMutex);
+    CloseHandles({hFile, hMutex, hEmpty, hFull, hConsoleMutex});
+    logger.Cleanup();
     return 0;
 }

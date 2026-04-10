@@ -6,6 +6,7 @@
 #include <vector>
 #include <initializer_list>
 #include <cstring>
+#include "logger.h"
 
 const int MAX_MSG_SIZE = 20;
 
@@ -23,10 +24,11 @@ struct FileHeader {
 };
 
 // Synchronizaion objects names
-const char* MUTEX_NAME = "Lab4_Mutex";
-const char* EMPTY_SEM_NAME = "Lab4_EmptySem";
-const char* FULL_SEM_NAME = "Lab4_FullSem";
-const char* READY_EVENT_PREFIX = "Lab4_Ready_";
+const char* MUTEX_NAME = "Global\\Lab4_Mutex";
+const char* EMPTY_SEM_NAME = "Global\\Lab4_EmptySem";
+const char* FULL_SEM_NAME = "Global\\Lab4_FullSem";
+const char* READY_EVENT_PREFIX = "Global\\Lab4_Ready_";
+const char* CONSOLE_MUTEX_NAME = "Global\\Lab4_ConsoleMutex";
 
 
 // Inline print error method
