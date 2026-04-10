@@ -239,7 +239,7 @@ int main() {
     DisplayMenu();
     while (running){
 
-        std::cout << "\nSender> ";
+        std::cout << "\nReceiver> ";
         std::string command;
         std::cin >> command;
         

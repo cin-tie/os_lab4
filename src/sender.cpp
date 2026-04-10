@@ -159,7 +159,7 @@ int main(int argc, char* argv[]){
         return 1;
     }
 
-    std::cout << "Sender " << senderId << " is ready!" << std::endl;
+    std::cout << "Sender " << senderId << " is ready" << std::endl;
     DisplaySenderMenu(senderId);
 
     // Main comman loop
